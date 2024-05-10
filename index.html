@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual City</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+</head>
+<body>
+    <canvas id="glCanvas" width="800" height="600"></canvas>
+<div id="debugInfo" style="position: absolute; top: 10px; left: 10px; color: white;"></div>
+
+    <script type="text/javascript">
+        document.addEventListener("DOMContentLoaded", function () {
+            // WebGL initialization
+            const canvas = document.getElementById('glCanvas');
+            const gl = canvas.getContext('webgl');
+            if (!gl) {
+                console.error('Unable to initialize WebGL. Your browser may not support it.');
+                return;
+            }
+
+// 顶点着色器程序
+const vsSource = `
+    attribute vec4 aVertexPosition;
+
+    uniform mat4 uModelViewMatrix;
+    uniform mat4 uProjectionMatrix;
+
+    void main() {
+        gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
+    }
+`;
+
+// 片段着色器程序
+const fsSource = `
+    precision mediump float;
+
+    uniform vec4 uSkyColor;
+    uniform vec4 uGroundColor;
+
+    void main() {
+        float y = gl_FragCoord.y / 600.0; // 根据片段在屏幕上的纵坐标计算y值，范围从0到1
+
+        // 插值计算天空和地面的颜色
+        vec4 color = mix(uSkyColor, uGroundColor, y);
+
+        gl_FragColor = color;
+    }
+`;
+
+
+
+
+// 初始化着色器程序
+const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+
+// 获取属性和统一变量位置
+const programInfo = {
+    program: shaderProgram,
+    attribLocations: {
+        vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+    },
+    uniformLocations: {
+        projectionMatrix: gl.getUniformLocation(shaderProgram, 'uProjectionMatrix'),
+        modelViewMatrix: gl.getUniformLocation(shaderProgram, 'uModelViewMatrix'),
+        skyColor: gl.getUniformLocation(shaderProgram, 'uSkyColor'), // 天空颜色
+        groundColor: gl.getUniformLocation(shaderProgram, 'uGroundColor'), // 地板颜色
+    },
+};
+
+
+// Build the city
+const city = generateCity();
+
+// Initialize player position and camera
+let playerPosition = [0, 3, 0];
+let cameraAngleX = 0;
+let cameraAngleY = 0;
+
+// Handle keyboard input
+const keysPressed = {};
+document.addEventListener('keydown', (event) => {
+    keysPressed[event.key] = true;
+});
+document.addEventListener('keyup', (event) => {
+    keysPressed[event.key] = false;
+});
+
+// Handle mouse input
+document.addEventListener('mousemove', (event) => {
+    const sensitivity = 0.01; // 滑鼠灵敏度
+    const deltaX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+    const deltaY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+    cameraAngleX -= deltaY * sensitivity;
+    cameraAngleY += deltaX * sensitivity;
+
+    // 限制相机角度范围
+    cameraAngleX = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, cameraAngleX));
+    cameraAngleY = cameraAngleY % (2 * Math.PI); // 限制在 0 到 2*PI 之间
+});
+
+// Rendering loop
+function render() {
+    updatePlayerPosition();
+    drawScene(gl, programInfo, city);
+    // Display camera angle for debugging
+    const debugInfoElement = document.getElementById('debugInfo');
+    debugInfoElement.textContent = `Camera Angle: ${cameraAngleY.toFixed(2)}`;
+    requestAnimationFrame(render);
+}
+render();
+
+
+// Update player position based on keyboard input
+function updatePlayerPosition() {
+    const speed = 1.3; // 移动速度
+    const movement = vec3.create(); // 创建一个移动向量
+
+    // 根据按键状态更新移动向量
+    if (keysPressed['w']) {
+        vec3.add(movement, movement, [0, 0, -speed]); // 向前移动
+    }
+    if (keysPressed['s']) {
+        vec3.add(movement, movement, [0, 0, speed]); // 向后移动
+    }
+    if (keysPressed['a']) {
+        vec3.add(movement, movement, [-speed, 0, 0]); // 向左移动
+    }
+    if (keysPressed['d']) {
+        vec3.add(movement, movement, [speed, 0, 0]); // 向右移动
+    }
+
+    // 将移动向量从世界坐标系转换为相对于玩家自身坐标系
+    const rotatedMovement = vec3.create();
+    vec3.transformMat4(rotatedMovement, movement, mat4.fromRotation(mat4.create(), -cameraAngleY, [0, 1, 0]));
+
+    // 更新玩家位置
+    vec3.add(playerPosition, playerPosition, rotatedMovement);
+}
+
+
+
+
+
+
+
+            // Initialize shader program
+            function initShaderProgram(gl, vsSource, fsSource) {
+                const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+                const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+                // Create the shader program
+                const shaderProgram = gl.createProgram();
+                gl.attachShader(shaderProgram, vertexShader);
+                gl.attachShader(shaderProgram, fragmentShader);
+                gl.linkProgram(shaderProgram);
+
+                // Check if creating the shader program failed
+                if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                    console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+                    return null;
+                }
+
+                return shaderProgram;
+            }
+
+            // Create shader of the given type, upload the source, and compile it
+            function loadShader(gl, type, source) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, source);
+                gl.compileShader(shader);
+
+                // Check if compiling the shader succeeded
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                    console.error('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+                    gl.deleteShader(shader);
+                    return null;
+                }
+
+                return shader;
+            }
+
+// Draw the scene
+function drawScene(gl, programInfo, city) {
+    // 使用着色器程序
+    gl.useProgram(programInfo.program);
+
+    // 清除畫布
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    gl.clearDepth(1.0);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // 設置投影矩陣和視圖矩陣
+    const fov = Math.PI / 4;
+    const aspect = gl.canvas.clientWidth / gl.canvas.clientHeight;
+    const zNear = 0.1;
+    const zFar = 1000.0;
+    const projectionMatrix = mat4.create();
+    mat4.perspective(projectionMatrix, fov, aspect, zNear, zFar);
+
+    const modelViewMatrix = mat4.create();
+
+    // 應用相機轉換
+    mat4.rotate(modelViewMatrix, modelViewMatrix, cameraAngleX, [1, 0, 0]);
+    mat4.rotate(modelViewMatrix, modelViewMatrix, cameraAngleY, [0, 1, 0]);
+    mat4.translate(modelViewMatrix, modelViewMatrix, [-playerPosition[0], -playerPosition[1], -playerPosition[2]]);
+
+    // 設置緩衝區
+    const buffers = initBuffers(gl, city);
+
+    // 設置着色器統一變量
+    gl.uniformMatrix4fv(programInfo.uniformLocations.projectionMatrix, false, projectionMatrix);
+    gl.uniformMatrix4fv(programInfo.uniformLocations.modelViewMatrix, false, modelViewMatrix);
+    gl.uniform4f(programInfo.uniformLocations.skyColor, 0.529, 0.808, 0.922, 1.0); // 天空顏色
+    gl.uniform4f(programInfo.uniformLocations.groundColor, 0.498, 0.847, 0.498, 1.0); // 地面顏色
+
+    // 繪製天空和地面
+    drawSkyGround(gl, programInfo, buffers.skyGround);
+
+    // 繪製城市
+    drawCity(gl, programInfo, buffers);
+}
+
+// 繪製天空和地面
+function drawSkyGround(gl, programInfo, skyGroundBuffer) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyGroundBuffer);
+    gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+    gl.drawArrays(gl.TRIANGLES, 0, 6); // 一個大的矩形有六個頂點
+}
+
+
+// 初始化缓冲区
+function initBuffers(gl, city) {
+    const positionBuffer = gl.createBuffer(); // 創建頂點緩衝區對象
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer); // 綁定到頂點緩衝區
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(city.positions), gl.STATIC_DRAW); // 將位置數據存入緩衝區
+
+    const colorBuffer = gl.createBuffer(); // 創建顏色緩衝區對象
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer); // 綁定到顏色緩衝區
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(city.colors), gl.STATIC_DRAW); // 將顏色數據存入緩衝區
+
+    // Create a large rectangle representing the sky and ground
+    const skyGroundPositions = [
+        -1000, 0, -1000,
+        1000, 0, -1000,
+        1000, 0, 1000,
+        -1000, 0, -1000,
+        1000, 0, 1000,
+        -1000, 0, 1000
+    ];
+
+    const skyGroundBuffer = gl.createBuffer(); // 創建緩衝區對象
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyGroundBuffer); // 綁定到緩衝區
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(skyGroundPositions), gl.STATIC_DRAW); // 將位置數據存入緩衝區
+
+    return {
+        position: positionBuffer,
+        color: colorBuffer,
+        skyGround: skyGroundBuffer, // 返回天空和地面緩衝區對象
+        numVertices: city.positions.length / 3
+    };
+}
+
+
+// 绘制城市
+function drawCity(gl, programInfo, buffers) {
+    // 绑定顶点缓冲区
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+    gl.vertexAttribPointer(programInfo.attribLocations.vertexPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+
+    // 绑定颜色缓冲区
+    <!-- gl.bindBuffer(gl.ARRAY_BUFFER, buffers.color); // 绑定颜色缓冲区 -->
+    <!-- vertexAttribPointer(programInfo.attribLocations.vertexColor, 4, gl.FLOAT, false, 0, 0); // 指定颜色缓冲区的数据 -->
+    <!-- gl.enableVertexAttribArray(programInfo.attribLocations.vertexColor); // 启用颜色缓冲区  -->
+
+    // 绘制
+    gl.drawArrays(gl.TRIANGLES, 0, buffers.numVertices);
+}
+
+
+
+
+
+            // Generate a random city
+            function generateCity() {
+                const city = {
+                    positions: [],
+                };
+
+                const numBuildings = 100;
+                const buildingSize = 10;
+
+                for (let i = 0; i < numBuildings; i++) {
+                    const x = Math.random() * 1000 - 500;
+                    const z = Math.random() * 1000 - 500;
+                    const height = Math.random() * 100 + 50;
+
+                    // Front face
+                    city.positions.push(
+                        x, 0, z,
+                        x + buildingSize, 0, z,
+                        x + buildingSize, height, z,
+                        x, 0, z,
+                        x + buildingSize, height, z,
+                        x, height, z
+                    );
+
+                    // Back face
+                    city.positions.push(
+                        x, 0, z + buildingSize,
+                        x + buildingSize, 0, z + buildingSize,
+                        x + buildingSize, height, z + buildingSize,
+                        x, 0, z + buildingSize,
+                        x + buildingSize, height, z + buildingSize,
+                        x, height, z + buildingSize
+                    );
+
+                    // Top face
+                    city.positions.push(
+                        x, height, z,
+                        x + buildingSize, height, z,
+                        x + buildingSize, height, z + buildingSize,
+                        x, height, z,
+                        x + buildingSize, height, z + buildingSize,
+                        x, height, z + buildingSize
+                    );
+
+                    // Bottom face
+                    city.positions.push(
+                        x, 0, z,
+                        x + buildingSize, 0, z,
+                        x + buildingSize, 0, z + buildingSize,
+                        x, 0, z,
+                        x + buildingSize, 0, z + buildingSize,
+                        x, 0, z + buildingSize
+                    );
+
+                    // Right face
+                    city.positions.push(
+                        x + buildingSize, 0, z,
+                        x + buildingSize, 0, z + buildingSize,
+                        x + buildingSize, height, z + buildingSize,
+                        x + buildingSize, 0, z,
+                        x + buildingSize, height, z + buildingSize,
+                        x + buildingSize, height, z
+                    );
+
+                    // Left face
+                    city.positions.push(
+                        x, 0, z,
+                        x, 0, z + buildingSize,
+                        x, height, z + buildingSize,
+                        x, 0, z,
+                        x, height, z + buildingSize,
+                        x, height, z
+                    );
+                }
+
+                return city;
+            }
+        });
+    </script>
+</body>
+</html>
